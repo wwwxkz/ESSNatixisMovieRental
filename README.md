@@ -20,7 +20,7 @@ Here are the specific instructions for this implementation:
 * Payment Provider Classes:
     * In the "PaymentProvider" folder, you will find two classes that contain basic (dummy) implementations of payment providers. These can be used as a starting point for your work.
 * RentalFeatures Class:
-    * Within the RentalFeatures class, you are required to implement the payment processing functionality. This should occur before executing the save command for a rental record.
+    * Within the RentalFeatures class, you are required to implement the payment processing functionality.
 * Payment Provider Designation:
     * The specific payment provider to be used in a rental is specified in the Rental model under the attribute named "PaymentMethod".
 * Extensibility:
