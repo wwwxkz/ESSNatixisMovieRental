@@ -1,0 +1,196 @@
+using System;
+using System.Threading;
+using System.Threading.Tasks;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Logging;
+using Moq;
+using MovieRental.API.Controllers;
+using MovieRental.Domain.DTOs;
+using MovieRental.Domain.Entities;
+using MovieRental.Domain.Features;
+using MovieRental.Domain.Interfaces;
+using Xunit;
+
+namespace MovieRental.Tests.Controllers
+{
+    public class RentalControllerTests
+    {
+        private readonly Mock<IRentalFeatures> _mockRentalFeatures;
+        private readonly Mock<ILogger<RentalController>> _mockLogger;
+        private readonly RentalController _controller;
+
+        public RentalControllerTests()
+        {
+            _mockRentalFeatures = new Mock<IRentalFeatures>();
+            _mockLogger = new Mock<ILogger<RentalController>>();
+
+            _controller = new RentalController(
+                _mockRentalFeatures.Object,
+                _mockLogger.Object);
+        }
+
+        [Fact]
+        public async Task CreateRental_ReturnsBadRequest_WhenModelStateIsInvalid()
+        {
+            // Arrange
+            _controller.ModelState.AddModelError("Error", "Model error");
+            var rentalDto = new CreateRentalDto();
+
+            // Act
+            var result = await _controller.CreateRental(rentalDto);
+
+            // Assert
+            Assert.IsType<BadRequestObjectResult>(result.Result);
+        }
+
+        [Fact]
+        public async Task CreateRental_ReturnsNotFound_WhenMovieDoesNotExist()
+        {
+            // Arrange
+            var rentalDto = new CreateRentalDto
+            {
+                MovieId = 999, // Non-existent movie
+                CustomerId = 1,
+                DaysRented = 7,
+                PaymentMethod = "CreditCard"
+            };
+
+            _mockMovieFeatures
+                .Setup(x => x.GetByIdAsync(It.IsAny<int>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync((MovieEntity)null);
+
+            // Act
+            var result = await _controller.CreateRental(rentalDto);
+
+            // Assert
+            var notFoundResult = Assert.IsType<NotFoundObjectResult>(result.Result);
+            Assert.NotNull(notFoundResult.Value);
+            Assert.Contains("not found", notFoundResult.Value.ToString()!);
+        }
+
+        [Fact]
+        public async Task CreateRental_ReturnsBadRequest_WhenMovieOutOfStock()
+        {
+            // Arrange
+            var outOfStockMovie = new MovieEntity 
+            { 
+                Id = 2, 
+                Title = "Out of Stock Movie", 
+                Stock = 0,
+                IsAvailable = true 
+            };
+
+            _dbContext.Movies.Add(outOfStockMovie);
+            await _dbContext.SaveChangesAsync();
+
+            var rentalDto = new CreateRentalDto
+            {
+                MovieId = 2,
+                CustomerId = 1,
+                DaysRented = 7,
+                PaymentMethod = "CreditCard"
+            };
+
+            _mockMovieFeatures
+                .Setup(x => x.GetByIdAsync(2, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(outOfStockMovie);
+
+            // Act
+            var result = await _controller.CreateRental(rentalDto);
+
+            // Assert
+            var badRequestResult = Assert.IsType<BadRequestObjectResult>(result.Result);
+            Assert.Equal("Movie is out of stock", badRequestResult.Value);
+        }
+
+        [Fact]
+        public async Task CreateRental_ReturnsCreated_WhenRentalIsValid()
+        {
+            // Arrange
+            var rentalDto = new CreateRentalDto
+            {
+                MovieId = 1,
+                CustomerId = 1,
+                DaysRented = 7,
+                PaymentMethod = "CreditCard"
+            };
+
+            var movie = await _dbContext.Movies.FindAsync(1);
+            _mockMovieFeatures
+                .Setup(x => x.GetByIdAsync(1, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(movie);
+
+            _mockRentalFeatures
+                .Setup(x => x.SaveAsync(It.IsAny<Rental.Rental>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync((Rental.Rental r, CancellationToken _) =>
+                {
+                    r.Id = 1;
+                    return r;
+                });
+
+            // Act
+            var result = await _controller.CreateRental(rentalDto);
+
+            // Assert
+            var createdAtActionResult = Assert.IsType<CreatedAtActionResult>(result.Result);
+            var returnValue = Assert.IsType<Rental.Rental>(createdAtActionResult.Value);
+            Assert.Equal(1, returnValue.Id);
+            Assert.Equal(7, returnValue.DaysRented);
+        }
+
+        [Fact]
+        public async Task GetRentalById_ReturnsNotFound_WhenRentalDoesNotExist()
+        {
+            // Arrange
+            _mockRentalFeatures
+                .Setup(x => x.GetRentalByIdAsync(It.IsAny<int>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync((Rental.Rental)null);
+
+            // Act
+            var result = await _controller.GetRentalById(999);
+
+            // Assert
+            Assert.IsType<NotFoundResult>(result.Result);
+        }
+
+        [Fact]
+        public async Task GetRentalsByCustomerName_ReturnsBadRequest_WhenNameIsEmpty()
+        {
+            // Act
+            var result = await _controller.GetRentalsByCustomerName(" ");
+
+            // Assert
+            var badRequestResult = Assert.IsType<BadRequestObjectResult>(result.Result);
+            Assert.NotNull(badRequestResult.Value);
+            Assert.Equal("Customer name cannot be empty", badRequestResult.Value.ToString());
+        }
+
+        [Fact]
+        public async Task GetRentalsByCustomerName_ReturnsMatchingRentals()
+        {
+            // Arrange
+            var rentals = new List<Rental.Rental>
+            {
+                new() { Id = 1, CustomerId = 1, MovieId = 1, DaysRented = 7, PaymentMethod = "CreditCard" }
+            };
+
+            _mockRentalFeatures
+                .Setup(x => x.GetRentalsByCustomerNameAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(rentals);
+
+            // Act
+            var result = await _controller.GetRentalsByCustomerName("Test");
+
+            // Assert
+            var okResult = Assert.IsType<OkObjectResult>(result.Result);
+            var returnValue = Assert.IsType<List<Rental.Rental>>(okResult.Value);
+            Assert.Single(returnValue);
+        }
+
+        public void Dispose()
+        {
+            _dbContext.Database.EnsureDeleted();
+            _dbContext.Dispose();
+        }
+    }
+}
